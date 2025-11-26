@@ -51,7 +51,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let admin_addr = admin_listener.local_addr();
     info!("admin endpoints on {} (/health, /metrics)", admin_addr);
 
-    let proxy_task = tokio::spawn({
+    let mut proxy_task = tokio::spawn({
         let shutdown_rx = shutdown_tx.subscribe();
         async move {
             if let Err(e) = proxy_listener.serve(shutdown_rx).await {
@@ -60,7 +60,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let admin_task = tokio::spawn({
+    let mut admin_task = tokio::spawn({
         let shutdown_rx = shutdown_tx.subscribe();
         async move {
             if let Err(e) = admin_listener.serve(shutdown_rx).await {
@@ -69,16 +69,42 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let mut proxy_finished = false;
+    let mut admin_finished = false;
+
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!("received ctrl-c, initiating graceful shutdown");
-            let _ = shutdown_tx.send(());
         }
-        _ = proxy_task => {
-            info!("proxy task completed");
+        res = &mut proxy_task => {
+            proxy_finished = true;
+            match res {
+                Ok(()) => info!("proxy task completed"),
+                Err(err) => error!("proxy task join error: {}", err),
+            }
         }
-        _ = admin_task => {
-            info!("admin task completed");
+        res = &mut admin_task => {
+            admin_finished = true;
+            match res {
+                Ok(()) => info!("admin task completed"),
+                Err(err) => error!("admin task join error: {}", err),
+            }
+        }
+    }
+
+    let _ = shutdown_tx.send(());
+
+    if !proxy_finished {
+        match proxy_task.await {
+            Ok(()) => info!("proxy task completed"),
+            Err(err) => error!("proxy task join error: {}", err),
+        }
+    }
+
+    if !admin_finished {
+        match admin_task.await {
+            Ok(()) => info!("admin task completed"),
+            Err(err) => error!("admin task join error: {}", err),
         }
     }
 
