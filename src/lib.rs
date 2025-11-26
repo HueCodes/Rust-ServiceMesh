@@ -3,6 +3,8 @@
 //! A service mesh proxy built with Rust, inspired by Envoy, providing
 //! HTTP/1.1 and HTTP/2 proxying, load balancing, and observability.
 
+pub mod admin;
+pub mod admin_listener;
 pub mod config;
 pub mod error;
 pub mod listener;

@@ -1,6 +1,7 @@
 //! Tower service implementation for HTTP proxying.
 
 use crate::error::{ProxyError, Result};
+use crate::metrics::Metrics;
 use http::{Request, Response, StatusCode, Uri};
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::body::{Bytes, Incoming};
@@ -11,8 +12,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 use tower::Service;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 /// HTTP proxy service that forwards requests to upstream servers.
 ///
@@ -73,12 +75,18 @@ impl ProxyService {
         &self,
         mut req: Request<Incoming>,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
+        let start = Instant::now();
+        let method = req.method().to_string();
+
         let upstream = self.select_upstream()?;
+        let upstream_owned = upstream.to_string();
 
         let upstream_uri = match self.build_upstream_uri(upstream, req.uri()) {
             Ok(uri) => uri,
             Err(e) => {
                 warn!("failed to build upstream URI: {}", e);
+                let duration = start.elapsed().as_secs_f64();
+                Metrics::record_request(&method, 502, &upstream_owned, duration);
                 return Ok(Self::error_response(
                     StatusCode::BAD_GATEWAY,
                     "Invalid upstream URI",
@@ -91,13 +99,27 @@ impl ProxyService {
 
         match self.client.request(req).await {
             Ok(response) => {
-                debug!(status = %response.status(), "received upstream response");
+                let status = response.status().as_u16();
+                let duration = start.elapsed().as_secs_f64();
+
+                info!(
+                    method = %method,
+                    status = status,
+                    upstream = %upstream_owned,
+                    duration_ms = duration * 1000.0,
+                    "request completed"
+                );
+
+                Metrics::record_request(&method, status, &upstream_owned, duration);
+
                 let (parts, body) = response.into_parts();
                 let boxed_body = body.boxed();
                 Ok(Response::from_parts(parts, boxed_body))
             }
             Err(e) => {
                 warn!("upstream request failed: {}", e);
+                let duration = start.elapsed().as_secs_f64();
+                Metrics::record_request(&method, 502, &upstream_owned, duration);
                 Ok(Self::error_response(
                     StatusCode::BAD_GATEWAY,
                     "Upstream request failed",
