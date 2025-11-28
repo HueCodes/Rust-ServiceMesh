@@ -9,6 +9,7 @@ use hyper::Request;
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tower::Service;
@@ -23,13 +24,15 @@ use tracing::{error, info, instrument, warn};
 /// ```no_run
 /// use rust_servicemesh::listener::Listener;
 /// use std::sync::Arc;
+/// use std::time::Duration;
 /// use tokio::sync::broadcast;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let (shutdown_tx, _) = broadcast::channel(1);
 ///     let upstream = vec!["http://127.0.0.1:8080".to_string()];
-///     let listener = Listener::bind("127.0.0.1:3000", Arc::new(upstream)).await?;
+///     let timeout = Duration::from_secs(30);
+///     let listener = Listener::bind("127.0.0.1:3000", Arc::new(upstream), timeout).await?;
 ///     listener.serve(shutdown_tx.subscribe()).await?;
 ///     Ok(())
 /// }
@@ -47,12 +50,17 @@ impl Listener {
     ///
     /// * `addr` - Address to bind to (e.g., "127.0.0.1:3000")
     /// * `upstream_addrs` - List of upstream server addresses
+    /// * `request_timeout` - Maximum duration for upstream requests
     ///
     /// # Errors
     ///
     /// Returns `ProxyError::ListenerBind` if binding fails.
     #[instrument(level = "info", skip(upstream_addrs))]
-    pub async fn bind(addr: &str, upstream_addrs: Arc<Vec<String>>) -> Result<Self> {
+    pub async fn bind(
+        addr: &str,
+        upstream_addrs: Arc<Vec<String>>,
+        request_timeout: Duration,
+    ) -> Result<Self> {
         let tcp_listener = TcpListener::bind(addr)
             .await
             .map_err(|e| ProxyError::ListenerBind {
@@ -71,7 +79,7 @@ impl Listener {
 
         Ok(Self {
             tcp_listener,
-            proxy_service: ProxyService::new(upstream_addrs),
+            proxy_service: ProxyService::new(upstream_addrs, request_timeout),
             addr: local_addr,
         })
     }
@@ -145,14 +153,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_listener_bind() {
         let upstream = Arc::new(vec!["http://127.0.0.1:9999".to_string()]);
-        let listener = Listener::bind("127.0.0.1:0", upstream).await;
+        let timeout = Duration::from_secs(30);
+        let listener = Listener::bind("127.0.0.1:0", upstream, timeout).await;
         assert!(listener.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_listener_bind_invalid_address() {
         let upstream = Arc::new(vec!["http://127.0.0.1:9999".to_string()]);
-        let listener = Listener::bind("999.999.999.999:0", upstream).await;
+        let timeout = Duration::from_secs(30);
+        let listener = Listener::bind("999.999.999.999:0", upstream, timeout).await;
         assert!(listener.is_err());
     }
 }

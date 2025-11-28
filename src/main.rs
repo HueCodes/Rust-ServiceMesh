@@ -1,5 +1,6 @@
 mod admin;
 mod admin_listener;
+mod circuit_breaker;
 mod config;
 mod error;
 mod listener;
@@ -43,7 +44,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
 
-    let proxy_listener = Listener::bind(&config.listen_addr, config.upstream_addrs_arc()).await?;
+    let proxy_listener = Listener::bind(
+        &config.listen_addr,
+        config.upstream_addrs_arc(),
+        config.request_timeout,
+    )
+    .await?;
     let proxy_addr = proxy_listener.local_addr();
     info!("proxy listening on {}", proxy_addr);
 
