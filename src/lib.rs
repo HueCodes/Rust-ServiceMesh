@@ -5,6 +5,7 @@
 
 pub mod admin;
 pub mod admin_listener;
+pub mod circuit_breaker;
 pub mod config;
 pub mod error;
 pub mod listener;
