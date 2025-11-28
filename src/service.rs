@@ -12,7 +12,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::time::timeout;
 use tower::Service;
 use tracing::{debug, info, instrument, warn};
 
@@ -25,11 +26,13 @@ use tracing::{debug, info, instrument, warn};
 /// ```no_run
 /// use rust_servicemesh::service::ProxyService;
 /// use std::sync::Arc;
+/// use std::time::Duration;
 ///
 /// #[tokio::main]
 /// async fn main() {
 ///     let upstream = "http://example.com:8080".to_string();
-///     let service = ProxyService::new(Arc::new(vec![upstream]));
+///     let timeout = Duration::from_secs(30);
+///     let service = ProxyService::new(Arc::new(vec![upstream]), timeout);
 /// }
 /// ```
 #[derive(Clone)]
@@ -37,6 +40,7 @@ pub struct ProxyService {
     upstream_addrs: Arc<Vec<String>>,
     client: Client<HttpConnector, Incoming>,
     next_upstream: Arc<std::sync::atomic::AtomicUsize>,
+    request_timeout: Duration,
 }
 
 impl ProxyService {
@@ -45,12 +49,14 @@ impl ProxyService {
     /// # Arguments
     ///
     /// * `upstream_addrs` - List of upstream server addresses (e.g., "http://127.0.0.1:8080")
-    pub fn new(upstream_addrs: Arc<Vec<String>>) -> Self {
+    /// * `request_timeout` - Maximum duration for upstream requests
+    pub fn new(upstream_addrs: Arc<Vec<String>>, request_timeout: Duration) -> Self {
         let client = Client::builder(TokioExecutor::new()).build_http();
         Self {
             upstream_addrs,
             client,
             next_upstream: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            request_timeout,
         }
     }
 
@@ -97,8 +103,8 @@ impl ProxyService {
         debug!("forwarding to upstream: {}", upstream_uri);
         *req.uri_mut() = upstream_uri;
 
-        match self.client.request(req).await {
-            Ok(response) => {
+        match timeout(self.request_timeout, self.client.request(req)).await {
+            Ok(Ok(response)) => {
                 let status = response.status().as_u16();
                 let duration = start.elapsed().as_secs_f64();
 
@@ -116,13 +122,22 @@ impl ProxyService {
                 let boxed_body = body.boxed();
                 Ok(Response::from_parts(parts, boxed_body))
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 warn!("upstream request failed: {}", e);
                 let duration = start.elapsed().as_secs_f64();
                 Metrics::record_request(&method, 502, &upstream_owned, duration);
                 Ok(Self::error_response(
                     StatusCode::BAD_GATEWAY,
                     "Upstream request failed",
+                ))
+            }
+            Err(_) => {
+                warn!("upstream request timed out after {:?}", self.request_timeout);
+                let duration = start.elapsed().as_secs_f64();
+                Metrics::record_request(&method, 504, &upstream_owned, duration);
+                Ok(Self::error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "Upstream request timed out",
                 ))
             }
         }
