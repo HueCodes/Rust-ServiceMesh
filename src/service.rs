@@ -132,7 +132,10 @@ impl ProxyService {
                 ))
             }
             Err(_) => {
-                warn!("upstream request timed out after {:?}", self.request_timeout);
+                warn!(
+                    "upstream request timed out after {:?}",
+                    self.request_timeout
+                );
                 let duration = start.elapsed().as_secs_f64();
                 Metrics::record_request(&method, 504, &upstream_owned, duration);
                 Ok(Self::error_response(

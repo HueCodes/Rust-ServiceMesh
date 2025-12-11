@@ -67,6 +67,7 @@ impl Default for CircuitBreakerConfig {
 ///     Ok(())
 /// }
 /// ```
+#[derive(Debug)]
 pub struct CircuitBreaker {
     state: Arc<RwLock<State>>,
     failure_count: Arc<AtomicU64>,
