@@ -78,9 +78,10 @@ async fn test_proxy_basic_request() {
     let upstream_addrs = Arc::new(vec![upstream_addr]);
     let timeout = Duration::from_secs(30);
 
-    let listener = rust_servicemesh::listener::Listener::bind("127.0.0.1:0", upstream_addrs, timeout)
-        .await
-        .unwrap();
+    let listener =
+        rust_servicemesh::listener::Listener::bind("127.0.0.1:0", upstream_addrs, timeout)
+            .await
+            .unwrap();
 
     let proxy_addr = listener.local_addr();
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -111,9 +112,10 @@ async fn test_proxy_round_robin() {
     let upstream_addrs = Arc::new(vec![upstream1, upstream2]);
     let timeout = Duration::from_secs(30);
 
-    let listener = rust_servicemesh::listener::Listener::bind("127.0.0.1:0", upstream_addrs, timeout)
-        .await
-        .unwrap();
+    let listener =
+        rust_servicemesh::listener::Listener::bind("127.0.0.1:0", upstream_addrs, timeout)
+            .await
+            .unwrap();
 
     let proxy_addr = listener.local_addr();
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -148,9 +150,10 @@ async fn test_proxy_timeout_enforcement() {
     // Set a short timeout (1 second)
     let timeout = Duration::from_secs(1);
 
-    let listener = rust_servicemesh::listener::Listener::bind("127.0.0.1:0", upstream_addrs, timeout)
-        .await
-        .unwrap();
+    let listener =
+        rust_servicemesh::listener::Listener::bind("127.0.0.1:0", upstream_addrs, timeout)
+            .await
+            .unwrap();
 
     let proxy_addr = listener.local_addr();
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -176,8 +179,14 @@ async fn test_proxy_timeout_enforcement() {
     assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
 
     // Should timeout in approximately 1 second, not 10
-    assert!(elapsed < Duration::from_secs(2), "Request should timeout quickly");
-    assert!(elapsed >= Duration::from_secs(1), "Request should wait for timeout");
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "Request should timeout quickly"
+    );
+    assert!(
+        elapsed >= Duration::from_secs(1),
+        "Request should wait for timeout"
+    );
 
     let _ = shutdown_tx.send(());
 }
