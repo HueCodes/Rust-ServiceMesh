@@ -109,8 +109,10 @@ async fn main() {
     let stats = cb.stats();
     info!("  Total requests: {}", stats.total_requests);
     info!("  Total failures: {}", stats.total_failures);
-    info!("  Failure rate: {:.1}%",
-        (stats.total_failures as f64 / stats.total_requests as f64) * 100.0);
+    info!(
+        "  Failure rate: {:.1}%",
+        (stats.total_failures as f64 / stats.total_requests as f64) * 100.0
+    );
 
     info!("\nDemo complete!");
 }

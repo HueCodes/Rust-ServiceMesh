@@ -24,9 +24,7 @@ async fn main() {
     info!("Starting basic proxy example");
 
     // Configure upstream servers
-    let upstream_addrs = Arc::new(vec![
-        "http://httpbin.org".to_string(),
-    ]);
+    let upstream_addrs = Arc::new(vec!["http://httpbin.org".to_string()]);
 
     // Configure request timeout
     let timeout = Duration::from_secs(30);

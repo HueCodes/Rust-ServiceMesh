@@ -1,12 +1,26 @@
+#[allow(dead_code)]
 mod admin;
 mod admin_listener;
+#[allow(dead_code)]
 mod circuit_breaker;
 mod config;
+#[allow(dead_code)]
 mod error;
+#[allow(dead_code)]
 mod listener;
+#[allow(dead_code)]
 mod metrics;
+#[allow(dead_code)]
+mod protocol;
+#[allow(dead_code)]
+mod ratelimit;
+#[allow(dead_code)]
+mod retry;
+#[allow(dead_code)]
 mod router;
+#[allow(dead_code)]
 mod service;
+#[allow(dead_code)]
 mod transport;
 
 use admin_listener::AdminListener;
