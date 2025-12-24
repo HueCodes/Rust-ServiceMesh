@@ -3,10 +3,42 @@
 //! Provides flexible routing rules for directing traffic to different
 //! upstream clusters based on request attributes.
 
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, warn};
+
+/// Global regex cache to avoid recompiling patterns on every request.
+static REGEX_CACHE: Lazy<RwLock<HashMap<String, Arc<Regex>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Gets or compiles a regex pattern, caching the result.
+fn get_or_compile_regex(pattern: &str) -> Option<Arc<Regex>> {
+    // Fast path: check if already cached
+    {
+        let cache = REGEX_CACHE.read();
+        if let Some(regex) = cache.get(pattern) {
+            return Some(Arc::clone(regex));
+        }
+    }
+
+    // Slow path: compile and cache
+    match Regex::new(pattern) {
+        Ok(regex) => {
+            let regex = Arc::new(regex);
+            let mut cache = REGEX_CACHE.write();
+            cache.insert(pattern.to_string(), Arc::clone(&regex));
+            Some(regex)
+        }
+        Err(e) => {
+            warn!(pattern = %pattern, error = %e, "invalid regex pattern");
+            None
+        }
+    }
+}
 
 /// Route matching priority (higher = evaluated first).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -67,13 +99,12 @@ impl HeaderMatch {
                 .and_then(|v| v.to_str().ok())
                 .is_some_and(|v| v.contains(value.as_str())),
             HeaderMatch::Regex { name, pattern } => {
-                if let Ok(regex) = Regex::new(pattern) {
+                if let Some(regex) = get_or_compile_regex(pattern) {
                     headers
                         .get(name)
                         .and_then(|v| v.to_str().ok())
                         .is_some_and(|v| regex.is_match(v))
                 } else {
-                    warn!(pattern = %pattern, "invalid regex pattern");
                     false
                 }
             }
@@ -121,10 +152,9 @@ impl PathMatch {
             PathMatch::Exact { path: expected } => path == expected,
             PathMatch::Prefix { prefix } => path.starts_with(prefix),
             PathMatch::Regex { pattern } => {
-                if let Ok(regex) = Regex::new(pattern) {
+                if let Some(regex) = get_or_compile_regex(pattern) {
                     regex.is_match(path)
                 } else {
-                    warn!(pattern = %pattern, "invalid regex pattern");
                     false
                 }
             }
@@ -339,8 +369,7 @@ impl Router {
 
     /// Sorts routes by priority (highest first).
     fn sort_routes(&mut self) {
-        self.routes
-            .sort_by_key(|r| std::cmp::Reverse(r.priority()));
+        self.routes.sort_by_key(|r| std::cmp::Reverse(r.priority()));
     }
 
     /// Finds the matching route for a request.
