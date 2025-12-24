@@ -63,9 +63,11 @@
 //! - `PROXY_REQUEST_TIMEOUT_MS`: Request timeout in milliseconds (default: 30000)
 
 pub mod admin;
+pub use admin::ReadinessState;
 pub mod admin_listener;
 pub mod circuit_breaker;
 pub mod config;
+pub mod connection;
 pub mod error;
 pub mod listener;
 pub mod metrics;
@@ -78,7 +80,8 @@ pub mod transport;
 
 // Re-export commonly used types
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, State as CircuitBreakerState};
-pub use config::ProxyConfig;
+pub use config::{ConfigError, ProxyConfig};
+pub use connection::{ConnectionConfig, ConnectionLimiter, ConnectionStats};
 pub use error::{ProxyError, Result};
 pub use listener::Listener;
 pub use protocol::{HttpProtocol, TlsConfig};
