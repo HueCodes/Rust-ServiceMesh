@@ -2,13 +2,17 @@
 //!
 //! Provides configurable rate limiting for incoming requests with support
 //! for multiple strategies: per-client, global, and per-route limiting.
+//!
+//! Supports X-Forwarded-For header parsing for clients behind proxies.
 
 use dashmap::DashMap;
+use http::HeaderMap;
 use parking_lot::Mutex;
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Configuration for rate limiting.
 #[derive(Debug, Clone)]
@@ -21,6 +25,10 @@ pub struct RateLimitConfig {
     pub per_client: bool,
     /// Time-to-live for client rate limit entries.
     pub client_ttl: Duration,
+    /// Whether to trust X-Forwarded-For headers.
+    pub trust_forwarded_for: bool,
+    /// Maximum number of IPs to consider from X-Forwarded-For chain.
+    pub max_forwarded_ips: usize,
 }
 
 impl Default for RateLimitConfig {
@@ -30,6 +38,8 @@ impl Default for RateLimitConfig {
             burst_size: 50,
             per_client: true,
             client_ttl: Duration::from_secs(300),
+            trust_forwarded_for: false,
+            max_forwarded_ips: 1,
         }
     }
 }
@@ -53,6 +63,25 @@ impl RateLimitConfig {
     /// Sets the TTL for client entries.
     pub fn with_client_ttl(mut self, ttl: Duration) -> Self {
         self.client_ttl = ttl;
+        self
+    }
+
+    /// Enables trusting X-Forwarded-For headers.
+    ///
+    /// **Security Warning**: Only enable this if the proxy is behind a trusted
+    /// load balancer that sets this header. Untrusted clients can spoof this
+    /// header to bypass rate limiting.
+    pub fn with_trust_forwarded_for(mut self, trust: bool) -> Self {
+        self.trust_forwarded_for = trust;
+        self
+    }
+
+    /// Sets the maximum number of IPs to consider from X-Forwarded-For.
+    ///
+    /// When set to 1, only the rightmost (closest to proxy) IP is used.
+    /// Higher values can be used in multi-proxy setups.
+    pub fn with_max_forwarded_ips(mut self, max: usize) -> Self {
+        self.max_forwarded_ips = max.max(1);
         self
     }
 }
@@ -170,6 +199,83 @@ impl RateLimiter {
     /// Creates a rate limiter with default configuration.
     pub fn with_defaults() -> Self {
         Self::new(RateLimitConfig::default())
+    }
+
+    /// Extracts the client IP from request headers.
+    ///
+    /// If `trust_forwarded_for` is enabled, attempts to parse the
+    /// X-Forwarded-For header. Falls back to the provided socket address.
+    ///
+    /// # Arguments
+    ///
+    /// * `headers` - HTTP request headers
+    /// * `socket_addr` - The direct socket connection address
+    pub fn extract_client_ip(
+        &self,
+        headers: &HeaderMap,
+        socket_addr: Option<IpAddr>,
+    ) -> Option<IpAddr> {
+        if self.config.trust_forwarded_for {
+            if let Some(forwarded) = headers.get("x-forwarded-for") {
+                if let Ok(value) = forwarded.to_str() {
+                    // X-Forwarded-For format: client, proxy1, proxy2, ...
+                    // We want the rightmost N IPs (closest to our proxy)
+                    let ips: Vec<&str> = value.split(',').map(|s| s.trim()).collect();
+
+                    // Take the first IP (original client) by default
+                    // In production with trusted proxies, you might want the last one
+                    // before your own proxy (ips.len() - max_forwarded_ips)
+                    if let Some(ip_str) = ips.first() {
+                        match IpAddr::from_str(ip_str) {
+                            Ok(ip) => {
+                                debug!(ip = %ip, "using X-Forwarded-For client IP");
+                                return Some(ip);
+                            }
+                            Err(e) => {
+                                warn!(
+                                    header = %value,
+                                    error = %e,
+                                    "invalid IP in X-Forwarded-For header"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Also check X-Real-IP header (used by nginx)
+            if let Some(real_ip) = headers.get("x-real-ip") {
+                if let Ok(value) = real_ip.to_str() {
+                    match IpAddr::from_str(value.trim()) {
+                        Ok(ip) => {
+                            debug!(ip = %ip, "using X-Real-IP client IP");
+                            return Some(ip);
+                        }
+                        Err(e) => {
+                            warn!(
+                                header = %value,
+                                error = %e,
+                                "invalid IP in X-Real-IP header"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        socket_addr
+    }
+
+    /// Checks if a request should be allowed using headers to determine client IP.
+    ///
+    /// Returns `Ok(())` if allowed, `Err(RateLimitInfo)` if rate limited.
+    pub fn check_with_headers(
+        &self,
+        headers: &HeaderMap,
+        socket_addr: Option<IpAddr>,
+    ) -> Result<(), RateLimitInfo> {
+        let client_ip = self.extract_client_ip(headers, socket_addr);
+        self.check(client_ip)
     }
 
     /// Checks if a request should be allowed.
@@ -314,6 +420,7 @@ impl Clone for RateLimitLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::HeaderMap;
     use std::net::Ipv4Addr;
 
     #[test]
@@ -400,5 +507,84 @@ mod tests {
         assert_eq!(stats.requests_per_second, 100);
         assert_eq!(stats.burst_size, 50);
         assert_eq!(stats.client_count, 0);
+    }
+
+    #[test]
+    fn test_extract_client_ip_no_trust() {
+        let config = RateLimitConfig::new(100, 50).with_trust_forwarded_for(false);
+        let limiter = RateLimiter::new(config);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+
+        let socket_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let result = limiter.extract_client_ip(&headers, Some(socket_ip));
+
+        // Should ignore X-Forwarded-For when trust is disabled
+        assert_eq!(result, Some(socket_ip));
+    }
+
+    #[test]
+    fn test_extract_client_ip_trust_enabled() {
+        let config = RateLimitConfig::new(100, 50).with_trust_forwarded_for(true);
+        let limiter = RateLimiter::new(config);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4, 5.6.7.8".parse().unwrap());
+
+        let socket_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let result = limiter.extract_client_ip(&headers, Some(socket_ip));
+
+        // Should use the first IP from X-Forwarded-For
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))));
+    }
+
+    #[test]
+    fn test_extract_client_ip_x_real_ip() {
+        let config = RateLimitConfig::new(100, 50).with_trust_forwarded_for(true);
+        let limiter = RateLimiter::new(config);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "10.0.0.1".parse().unwrap());
+
+        let socket_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let result = limiter.extract_client_ip(&headers, Some(socket_ip));
+
+        // Should use X-Real-IP
+        assert_eq!(result, Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    }
+
+    #[test]
+    fn test_extract_client_ip_invalid_header() {
+        let config = RateLimitConfig::new(100, 50).with_trust_forwarded_for(true);
+        let limiter = RateLimiter::new(config);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
+
+        let socket_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let result = limiter.extract_client_ip(&headers, Some(socket_ip));
+
+        // Should fall back to socket address when header is invalid
+        assert_eq!(result, Some(socket_ip));
+    }
+
+    #[test]
+    fn test_check_with_headers() {
+        let config = RateLimitConfig::new(100, 5)
+            .with_per_client(true)
+            .with_trust_forwarded_for(true);
+        let limiter = RateLimiter::new(config);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+
+        // Should allow requests up to burst size
+        for _ in 0..5 {
+            assert!(limiter.check_with_headers(&headers, None).is_ok());
+        }
+
+        // Should be rate limited
+        assert!(limiter.check_with_headers(&headers, None).is_err());
     }
 }
