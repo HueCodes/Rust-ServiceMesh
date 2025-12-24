@@ -6,7 +6,6 @@ use rust_servicemesh::ratelimit::{RateLimitConfig, RateLimiter};
 use rust_servicemesh::retry::{RetryConfig, RetryPolicy};
 use rust_servicemesh::router::{PathMatch, Route, Router};
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::Duration;
 
 fn bench_circuit_breaker(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
