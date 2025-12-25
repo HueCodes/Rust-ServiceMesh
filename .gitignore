@@ -1,6 +1,32 @@
 /target/
 Cargo.lock
+
+# Editor and IDE
 *.swp
 *.swo
 *~
 .DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Logs
+*.log
+logs/
+
+# Coverage
+*.profraw
+*.profdata
+coverage/
+lcov.info
+tarpaulin-report.html
