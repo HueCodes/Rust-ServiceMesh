@@ -369,9 +369,7 @@ mod tests {
     #[tokio::test]
     async fn test_retry_executor_success() {
         let mut executor = RetryExecutor::with_defaults();
-        let result = executor
-            .execute(|| async { Ok::<i32, &str>(42) })
-            .await;
+        let result = executor.execute(|| async { Ok::<i32, &str>(42) }).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);

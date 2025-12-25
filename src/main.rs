@@ -5,6 +5,8 @@ mod admin_listener;
 mod circuit_breaker;
 mod config;
 #[allow(dead_code)]
+mod connection;
+#[allow(dead_code)]
 mod error;
 #[allow(dead_code)]
 mod listener;
