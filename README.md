@@ -1,5 +1,7 @@
 # Rust Service Mesh
 
+[![CI](https://github.com/HueCodes/Rust-ServiceMesh/actions/workflows/ci.yml/badge.svg)](https://github.com/HueCodes/Rust-ServiceMesh/actions/workflows/ci.yml)
+
 A high-performance service mesh data plane proxy built in Rust with Tokio, Hyper, Tower, and Rustls.
 
 ## Features
